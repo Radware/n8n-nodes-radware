@@ -1,8 +1,9 @@
 # n8n-nodes-radware
 
-This is an n8n community node. It lets you use _app/service name_ in your n8n workflows.
+This is an n8n community node for interacting with Radware Threat Intelligence service.
+It lets you use \*\*Radware IP Insight\*\* in your n8n workflows.
 
-_App/service name_ is _one or two sentences describing the service this node integrates with_.
+
 
 [n8n](https://n8n.io/) is a [fair-code licensed](https://docs.n8n.io/sustainable-use-license/) workflow automation platform.
 
@@ -14,33 +15,73 @@ _App/service name_ is _one or two sentences describing the service this node int
 [Resources](#resources)
 [Version history](#version-history)
 
+
+
 ## Installation
 
 Follow the [installation guide](https://docs.n8n.io/integrations/community-nodes/installation/) in the n8n community nodes documentation.
 
+
+
 ## Operations
 
-_List the operations supported by your node._
+### IP Insight
+   The Radware IP Insight node enables IP enrichment through Radware’s Threat Intelligence REST API endpoint.
+
+   It can process a single or multiple IPv4 addresses from different trigger types, extract IPs automatically from input data, or read them from uploaded files in various formats.
+
+   The multifunctional node is designed for secure parsing and supports retry logic for failed IP lookups.
+
+*1)Supports auto-detect that automatically extracts IPs from input.*
+  - Automatically detects IPs or IP List from your input: free text, complete JSON objects, or delimiter-separated text (space, comma, newline, single quote, double quote)
+
+*2)Body Input Mode: specific field, simple list, and raw JSON.*
+  - when “Auto-detect Input” turn off, you can select specific input format:
+      a. Field – you can select specific or multiple fields
+      b. Simple List – one IP per line or comma-separated or IPs with single quote and/or double quote
+      c. raw JSON - IP's in JSON format
+
+*3)File Upload support with ability to parse multiple documents formatted with JSON, TXT, CSV, LOG, RTF, DOCX, XLSX, and PDF.*
+
+*4)Provides customizable field projection for specific API response data.*
+   - Projection defines which fields to return in the API response.
+   - By default the projection was set to “all” but you can replace it according to your specific use-case.
+   - Supported fields include country_iso, ip_type, risk_score, actionable_insight and more.
+
+*5)Includes configurable output modes to control response detail level.*
+   - Choose between “All” (includes IP which was failures to address) or “Valid Only” (successful IP Insight result only)
+
+
 
 ## Credentials
 
-_If users need to authenticate with the app/service, provide details here. You should include prerequisites (such as signing up with the service), available authentication methods, and how to set them up._
+* - This node uses \*\*Radware IP Insight API credentials\*\*.*
+
+* - To authenticate, you must provide:*
+
+  - \*\*Context (API ID)\*\* — Your Radware Cloud tenant/account identifier*
+  - \*\*x-api-key\*\* — Your Radware API key*
+
+
+
+* - Subscribe to configure Radware API keys here:*
+    [Radware Threat Intelligence Service](https://www.radware.com/products/threat-intelligence-service/)
+
+
+
 
 ## Compatibility
 
-_State the minimum n8n version, as well as which versions you test against. You can also include any known version incompatibility issues._
+ - Minimum n8n version: \*\*compatible with 1.114.4 and recent n8n releases\*\**
 
-## Usage
+ - Tested on: self-hosted n8n stable builds*
 
-_This is an optional section. Use it to help users with any difficult or confusing aspects of the node._
 
-_By the time users are looking for community nodes, they probably already know n8n basics. But if you expect new users, you can link to the [Try it out](https://docs.n8n.io/try-it-out/) documentation to help them get started._
 
 ## Resources
 
-* [n8n community nodes documentation](https://docs.n8n.io/integrations/#community-nodes)
-* _Link to app/service documentation._
+ [n8n community nodes documentation](https://docs.n8n.io/integrations/#community-nodes)
 
-## Version history
 
-_This is another optional section. If your node has multiple versions, include a short description of available versions and what changed, as well as any compatibility impact._
+## License
+- MIT
