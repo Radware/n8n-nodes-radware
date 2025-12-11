@@ -1,0 +1,40 @@
+{
+  "name": "n8n-nodes-radware",
+  "version": "0.1.0",
+  "description": "Radwarecommunity-node for n8n",
+  "license": "MIT",
+  "keywords": [
+    "n8n-community-node-package"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && npm run copy:assets",
+    "copy:assets": "mkdir -p dist/nodes/Radware && cp src/nodes/Radware/radware_v1.svg dist/nodes/Radware/",
+    "pack": "npm pack"
+  },
+  "files": [
+    "dist/**/*"
+  ],
+  "n8n": {
+    "n8nNodes": "dist/nodes",
+    "n8nCredentials": "dist/credentials"
+  },
+  "devDependencies": {
+    "@n8n/node-cli": "*",
+    "@types/node": "^24.7.0",
+    "eslint": "9.32.0",
+    "n8n-core": "^1.114.0",
+    "n8n-workflow": "^1.112.0",
+    "prettier": "3.6.2",
+    "release-it": "^19.0.4",
+    "typescript": "^5.9.2"
+  },
+  "peerDependencies": {
+    "n8n-workflow": "*"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "dependencies": {
+    "jszip": "^3.10.1",
+    "pdf-parse": "^2.4.5"
+  }
+}

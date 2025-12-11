@@ -1,0 +1,316 @@
+import {
+	IDataObject,
+	IHttpRequestOptions,
+	INodeExecutionData,
+	INodeType,
+	INodeTypeDescription,
+} from 'n8n-workflow';
+import type { IExecuteFunctions } from 'n8n-workflow';
+import { NodeApiError, NodeOperationError } from 'n8n-workflow';
+
+/** Normalize ANY reasonable upstream shape into an array<string> of IPs. */
+function extractAddressesAuto(json: IDataObject): string[] {
+	// 1) direct arrays: addresses / ips / ipList
+	for (const key of ['addresses', 'ips', 'ipList']) {
+		const v = json[key];
+		if (Array.isArray(v)) return (v as unknown[]).map(String).map((s) => s.trim()).filter(Boolean);
+	}
+
+	// 2) single ip
+	if (typeof json.ip === 'string' && json.ip.trim()) return [json.ip.trim()];
+
+	// 3) common text fields: chatInput / text / message / body
+	for (const key of ['chatInput', 'text', 'message', 'body']) {
+		const raw = json[key];
+		if (typeof raw === 'string' && raw.trim()) {
+			const t = raw.trim();
+			// If it looks like JSON with addresses, try parse it
+			if (t.startsWith('{') || t.startsWith('[')) {
+				try {
+					const parsed = JSON.parse(t);
+					if (Array.isArray((parsed as any).addresses)) {
+						return (parsed as any).addresses.map((x: any) => String(x).trim()).filter(Boolean);
+					}
+				} catch {
+					/* fall back to splitter */
+				}
+			}
+			// Otherwise split by whitespace/commas/semicolons
+			return t
+				.replace(/["']/g, '')
+				.split(/[\s,;]+/)
+				.map((s) => s.trim())
+				.filter(Boolean);
+		}
+	}
+
+	// 4) nothing recognized
+	return [];
+}
+
+/** Split a comma/newline separated list of IPs into an array */
+function parseSimpleList(text: string): string[] {
+	return (text || '')
+		.replace(/["']/g, '')
+		.split(/[\s,;]+/)
+		.map((s) => s.trim())
+		.filter((s) => s.length > 0);
+}
+
+export class Radware implements INodeType {
+	description: INodeTypeDescription = {
+		displayName: 'Radware',
+		name: 'radware',
+		icon: 'file:radware.svg', // change if your svg filename differs
+		group: ['transform'],
+		version: 1,
+		subtitle: '={{$parameter["operation"]}}',
+		description: 'Radware integrations',
+		defaults: { name: 'Radware' },
+		inputs: ['main'],
+		outputs: ['main'],
+		credentials: [{ name: 'radwareApi', required: true }],
+		properties: [
+			/* WHAT */
+			{
+				displayName: 'Operation',
+				name: 'operation',
+				type: 'options',
+				default: 'ipInsight',
+				options: [{ name: 'IP Insight', value: 'ipInsight' }],
+			},
+
+			/* WHERE */
+			{
+				displayName: 'Base URL',
+				name: 'baseUrl',
+				type: 'string',
+				default: 'https://api.radwarecloud.app/api/v1/sdcc/threat/core',
+				placeholder: 'https://<host>/api/v1/sdcc/threat/core',
+				description: 'Do NOT include /insight/_bulkResolve — it is appended automatically.',
+			},
+
+			/* AUTO-DETECT */
+			{
+				displayName: 'Auto-detect Input',
+				name: 'autoDetect',
+				type: 'boolean',
+				default: true,
+				description:
+					'Try to extract IPs from incoming item automatically (addresses/ips array, single ip, JSON string, or comma/newline separated text).',
+			},
+
+			/* HOW */
+			{
+				displayName: 'Body Input Mode',
+				name: 'bodyMode',
+				type: 'options',
+				default: 'fields',
+				options: [
+					{ name: 'Fields', value: 'fields', description: 'Add IPs row-by-row (no quotes needed)' },
+					{ name: 'Simple List', value: 'list', description: 'Paste/drag IPs separated by commas or new lines' },
+					{ name: 'Raw JSON', value: 'raw', description: 'Provide full JSON body (advanced)' },
+				],
+			},
+
+			/* Simple List */
+			{
+				displayName: 'Addresses (List)',
+				name: 'addressesText',
+				type: 'string',
+				typeOptions: { rows: 6 },
+				default: '',
+				placeholder: 'One IP per line or comma-separated (e.g. 8.8.8.8, 1.1.1.1)',
+				description: 'Paste or drag IPs. Quotes not required.',
+				displayOptions: { show: { bodyMode: ['list'] } },
+			},
+
+			/* Fields list */
+			{
+				displayName: 'Addresses',
+				name: 'addresses',
+				type: 'string',
+				typeOptions: { multipleValues: true, multipleValueButtonText: 'Add IP' },
+				default: [],
+				placeholder: '8.8.8.8',
+				description: 'Up to 200 IPs. Drag values from previous nodes into a row (no quotes needed).',
+				displayOptions: { show: { bodyMode: ['fields'] } },
+			},
+			{
+				displayName: 'Projection',
+				name: 'projection',
+				type: 'multiOptions',
+				options: [{ name: 'all', value: 'all' }],
+				default: ['all'],
+				displayOptions: { show: { bodyMode: ['fields', 'list'] } },
+			},
+
+			/* Raw JSON */
+			{
+				displayName: 'Raw JSON Body',
+				name: 'rawJsonBody',
+				type: 'string',
+				typeOptions: { rows: 8 },
+				default:
+`{
+  "addresses": [],
+  "projection": ["all"]
+}`,
+				description: 'Paste JSON or drag expressions. Example: {"addresses":["1.2.3.4"],"projection":["all"]}.',
+				displayOptions: { show: { bodyMode: ['raw'] } },
+			},
+
+			/* Pass-throughs */
+			{
+				displayName: 'Query Parameters',
+				name: 'queryParametersUi',
+				type: 'fixedCollection',
+				typeOptions: { multipleValues: true },
+				default: {},
+				placeholder: 'Add Query Parameter',
+				options: [{
+					name: 'parameter',
+					displayName: 'Parameter',
+					values: [
+						{ displayName: 'Name', name: 'name', type: 'string', default: '' },
+						{ displayName: 'Value', name: 'value', type: 'string', default: '' },
+					],
+				}],
+			},
+			{
+				displayName: 'Extra Headers',
+				name: 'headersUi',
+				type: 'fixedCollection',
+				typeOptions: { multipleValues: true },
+				default: {},
+				placeholder: 'Add Header',
+				options: [{
+					name: 'header',
+					displayName: 'Header',
+					values: [
+						{ displayName: 'Name', name: 'name', type: 'string', default: '' },
+						{ displayName: 'Value', name: 'value', type: 'string', default: '' },
+					],
+				}],
+			},
+
+			/* Transport Options */
+			{
+				displayName: 'Options',
+				name: 'options',
+				type: 'collection',
+				placeholder: 'Add Option',
+				default: {},
+				options: [
+					{ displayName: 'Ignore SSL Issues', name: 'ignoreSslIssues', type: 'boolean', default: false },
+					{ displayName: 'Proxy', name: 'proxy', type: 'string', default: '', placeholder: 'http://user:pass@host:port' },
+					{ displayName: 'Timeout (ms)', name: 'timeout', type: 'number', default: 30000 },
+					{ displayName: 'Return Full Response', name: 'returnFullResponse', type: 'boolean', default: false },
+				],
+			},
+		],
+	};
+
+	async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
+		const items = this.getInputData();
+		const out: INodeExecutionData[] = [];
+
+		for (let i = 0; i < items.length; i++) {
+			const operation = this.getNodeParameter('operation', i) as string;
+			if (operation !== 'ipInsight') {
+				throw new NodeOperationError(this.getNode(), `Unsupported operation: ${operation}`);
+			}
+
+			const baseUrl = this.getNodeParameter('baseUrl', i) as string;
+			const bodyMode = this.getNodeParameter('bodyMode', i) as 'fields' | 'list' | 'raw';
+			const autoDetect = this.getNodeParameter('autoDetect', i) as boolean;
+
+			let body: IDataObject | undefined;
+
+			/* 1) Auto-detect from input (if enabled) */
+			if (autoDetect) {
+				const auto = extractAddressesAuto(items[i].json as IDataObject);
+				if (auto.length) body = { addresses: auto.slice(0, 200), projection: ['all'] };
+			}
+
+			/* 2) If auto-detect didn’t produce a body, honor explicit mode */
+			if (!body) {
+				if (bodyMode === 'raw') {
+					const raw = (this.getNodeParameter('rawJsonBody', i, '') as string) || '';
+					if (!raw.trim()) {
+						throw new NodeOperationError(this.getNode(), 'Raw JSON Body is empty. Switch to Fields/List or provide JSON.');
+					}
+					try {
+						body = JSON.parse(raw);
+					} catch {
+						throw new NodeOperationError(this.getNode(), 'Raw JSON Body is not valid JSON');
+					}
+				} else if (bodyMode === 'list') {
+					const addressesText = (this.getNodeParameter('addressesText', i, '') as string) || '';
+					const addresses = parseSimpleList(addressesText);
+					if (!addresses.length) throw new NodeOperationError(this.getNode(), 'Please enter at least one IP address in the list.');
+					const projection = this.getNodeParameter('projection', i, ['all']) as string[];
+					body = { addresses: addresses.slice(0, 200), projection };
+				} else {
+					const addresses = (this.getNodeParameter('addresses', i, []) as string[]).filter(Boolean);
+					if (!addresses.length) throw new NodeOperationError(this.getNode(), 'Please add at least one IP address.');
+					const projection = this.getNodeParameter('projection', i, ['all']) as string[];
+					body = { addresses: addresses.slice(0, 200), projection };
+				}
+			}
+
+			/* 3) Pass-throughs */
+			const qpCollection = this.getNodeParameter('queryParametersUi', i, {}) as IDataObject;
+			const headersCollection = this.getNodeParameter('headersUi', i, {}) as IDataObject;
+
+			const qs: IDataObject = {};
+			if (qpCollection.parameter && Array.isArray(qpCollection.parameter)) {
+				for (const p of qpCollection.parameter as IDataObject[]) {
+					if (p.name) qs[p.name as string] = p.value;
+				}
+			}
+
+			const extraHeaders: IDataObject = {};
+			if (headersCollection.header && Array.isArray(headersCollection.header)) {
+				for (const h of headersCollection.header as IDataObject[]) {
+					if (h.name) extraHeaders[h.name as string] = h.value;
+				}
+			}
+
+			/* 4) Transport options */
+			const options = this.getNodeParameter('options', i, {}) as IDataObject;
+			const ignoreSslIssues = !!options.ignoreSslIssues;
+			const proxy = (options.proxy as string) || undefined;
+			const timeout = (options.timeout as number) ?? 30000;
+			const returnFullResponse = !!options.returnFullResponse;
+
+			/* 5) Request */
+			const requestOptions: IHttpRequestOptions = {
+				method: 'POST',
+				url: `${(baseUrl || '').replace(/\/$/, '')}/insight/_bulkResolve`,
+				json: true,
+				body,
+				headers: { 'Content-Type': 'application/json', ...extraHeaders },
+				qs,
+				timeout,
+			};
+
+			if (ignoreSslIssues) (requestOptions as any).rejectUnauthorized = false;
+			if (proxy) (requestOptions as any).proxy = proxy;
+			if (returnFullResponse) (requestOptions as any).resolveWithFullResponse = true;
+
+			try {
+				const response = await this.helpers.httpRequestWithAuthentication.call(
+					this,
+					'radwareApi',
+					requestOptions,
+				);
+				out.push({ json: response as IDataObject });
+			} catch (error) {
+				throw new NodeApiError(this.getNode(), error);
+			}
+		}
+
+		return [out];
+	}
+}
