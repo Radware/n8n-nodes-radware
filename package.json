@@ -1,10 +1,24 @@
 {
   "name": "n8n-nodes-radware",
   "version": "0.1.0",
-  "description": "Radwarecommunity-node for n8n",
+  "description": "Radware community node for n8n",
   "license": "MIT",
+  "author": "Radware",
+  "homepage": "https://github.com/Radware/n8n-nodes-radware",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Radware/n8n-nodes-radware.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Radware/n8n-nodes-radware/issues"
+  },
   "keywords": [
-    "n8n-community-node-package"
+    "n8n-community-node-package",
+    "n8n",
+    "radware",
+    "threat-intelligence",
+    "ip-insight",
+    "security"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json && npm run copy:assets",
