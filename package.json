@@ -26,7 +26,11 @@
     "pack": "npm pack"
   },
   "files": [
-    "dist/**/*"
+    "dist/credentials/**/*",
+    "dist/nodes/**/*",
+    "dist/index.js",
+    "dist/index.d.ts",
+    "dist/index.js.map"
   ],
   "n8n": {
     "n8nNodes": "dist/nodes",
