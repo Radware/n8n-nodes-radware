@@ -5,7 +5,7 @@ export class RadwareApi implements ICredentialType {
 	displayName = 'Radware API';
 
 	// “Open docs” in the credential modal
-	documentationUrl = 'https://github.com/<your-org>/<your-repo>#authentication';
+	documentationUrl = 'https://github.com/Radware/n8n-nodes-radware';
 
 	properties: INodeProperties[] = [
 		{
