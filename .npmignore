@@ -1,0 +1,6 @@
+dist/tsconfig.build.tsbuildinfo
+*.tgz
+node_modules
+src
+.git
+.github
