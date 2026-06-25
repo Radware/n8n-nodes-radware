@@ -1,6 +1,6 @@
 {
   "name": "n8n-nodes-radware",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Radware community node for n8n",
   "license": "MIT",
   "author": "Radware",
@@ -33,14 +33,14 @@
     "dist/index.js.map"
   ],
   "n8n": {
-  "n8nNodesApiVersion": 1,
-  "strict": true,
-  "credentials": [
-    "dist/credentials/RadwareApi.credentials.js"
-  ],
-  "nodes": [
-    "dist/nodes/Radware/Radware.node.js"
-  ]
+    "n8nNodesApiVersion": 1,
+    "strict": true,
+    "credentials": [
+      "dist/credentials/RadwareApi.credentials.js"
+    ],
+    "nodes": [
+      "dist/nodes/Radware/Radware.node.js"
+    ]
   },
   "devDependencies": {
     "@n8n/node-cli": "*",
