@@ -8,8 +8,6 @@ import {
 } from 'n8n-workflow';
 import type { IExecuteFunctions } from 'n8n-workflow';
 import { NodeOperationError } from 'n8n-workflow';
-import JSZip from 'jszip';
-const pdfParse = require('pdf-parse');
 
 /* ---------------------------------------- */
 /* HELPERS: parsing & extraction utilities  */
@@ -93,47 +91,6 @@ function extractAddressesAuto(json: IDataObject): string[] {
         return [];
 }
 
-/** Very light RTF → text pass to make IPs extractable. */
-//  Strips basic RTF control words/braces to plain text.
-function stripRtfToText(rtf: string): string {
-        return rtf
-                .replace(/\\par[d]?/g, '\n')
-                .replace(/\\'[0-9a-fA-F]{2}/g, ' ')
-                .replace(/\\[a-zA-Z]+\d*(?:\s|)/g, ' ')
-                .replace(/[{}]/g, ' ')
-                .replace(/\s+/g, ' ')
-                .trim();
-}
-
-/** DOCX text extraction via JSZip (no macro execution). */
-//  Reads XML payload only; no active content is executed.
-async function extractTextFromDocx(buffer: Buffer): Promise<string> {
-        const zip = await JSZip.loadAsync(buffer);
-        const docXml = await zip.file('word/document.xml')?.async('string');
-        if (!docXml) return '';
-        return docXml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-}
-
-/** XLSX text extraction via JSZip (shared strings + sheets). */
-//  Collects inline text; avoids executing formulas/macros.
-async function extractTextFromXlsx(buffer: Buffer): Promise<string> {
-        const zip = await JSZip.loadAsync(buffer);
-        let text = '';
-        const shared = await zip.file('xl/sharedStrings.xml')?.async('string');
-        if (shared) text += ' ' + shared.replace(/<[^>]+>/g, ' ');
-        const sheetFolder = zip.folder('xl/worksheets');
-        if (sheetFolder) {
-                const files = Object.keys((sheetFolder as any).files || {});
-                for (const f of files) {
-                        if (f.endsWith('.xml')) {
-                                const s = await zip.file(f)?.async('string');
-                                if (s) text += ' ' + s.replace(/<[^>]+>/g, ' ');
-                        }
-                }
-        }
-        return text.replace(/\s+/g, ' ').trim();
-}
-
 /** Quick sniff for JSON-looking payloads. */
 function looksLikeJson(buffer: Buffer): boolean {
         const s = buffer.slice(0, 32).toString('utf8').trim();
@@ -142,8 +99,7 @@ function looksLikeJson(buffer: Buffer): boolean {
 
 /**
  * Extract addresses from uploaded binary files.
- *  Only returns IPv4s. Supports JSON/TXT/CSV/LOG/RTF/DOCX/XLSX/PDF.
- *  Parsing is text-only; no active content or macros are executed.
+ *  Only returns IPv4s. Supports JSON/TXT/CSV/LOG.
  *  Unsupported types throw a clear error.
  */
 async function addressesFromBinary(
@@ -159,16 +115,12 @@ async function addressesFromBinary(
                 'application/json',
                 'text/plain',
                 'text/csv',
-                'application/rtf',
-                'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // .docx
-                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',       // .xlsx
-                'application/pdf',
         ]);
-        const ALLOWED_EXT = new Set<string>(['json', 'txt', 'csv', 'log', 'rtf', 'docx', 'xlsx', 'pdf']);
+        const ALLOWED_EXT = new Set<string>(['json', 'txt', 'csv', 'log']);
 
         // Reject early if neither MIME nor EXT is allowed
         if (![...ALLOWED_MIME].some((m) => lcMime === m) && !ALLOWED_EXT.has(lcExt)) {
-                throw new Error('Unsupported file type. Allowed: JSON, TXT, CSV, LOG, RTF, DOCX, XLSX, PDF');
+                throw new Error('Unsupported file type. Allowed: JSON, TXT, CSV, LOG');
         }
 
         // JSON: accept array or { addresses: [...] }, but ALWAYS filter to IPv4s only.
@@ -187,25 +139,6 @@ async function addressesFromBinary(
         // Plain text: explicit types only (txt/csv/log)
         if (lcMime === 'text/plain' || lcMime === 'text/csv' || ['txt', 'csv', 'log'].includes(lcExt)) {
                 return parseSimpleList(buffer.toString('utf8'));
-        }
-
-        // RTF → text → IPv4s
-        if (lcMime === 'application/rtf' || lcExt === 'rtf') return extractIpsFromText(stripRtfToText(buffer.toString('utf8')));
-
-        // DOCX → text → IPv4s
-        if (lcMime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || lcExt === 'docx') {
-                return extractIpsFromText(await extractTextFromDocx(buffer));
-        }
-
-        // XLSX → text → IPv4s
-        if (lcMime === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' || lcExt === 'xlsx') {
-                return extractIpsFromText(await extractTextFromXlsx(buffer));
-        }
-
-        // PDF → text → IPv4s
-        if (lcMime === 'application/pdf' || lcExt === 'pdf') {
-                const result = await pdfParse(buffer);
-                return extractIpsFromText((result?.text as string) || '');
         }
 
         throw new Error('Unsupported file type');
@@ -260,7 +193,7 @@ export class Radware implements INodeType {
                                 type: 'boolean',
                                 default: false,
                                 description:
-                                        'Enable file upload to process multiple IPs. Specify the parameter name for the file field. Supported formats: JSON, TXT, CSV, LOG, RTF, DOCX, XLSX, PDF.',
+                                        'Enable file upload to process multiple IPs. Specify the parameter name for the file field. Supported formats: JSON, TXT, CSV, LOG.',
                         },
 
                         // Multiple keys and wildcard support in tooltip/placeholder

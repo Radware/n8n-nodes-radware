@@ -42,7 +42,7 @@ The multifunctional node is designed for secure parsing and supports retry logic
 
   c. raw JSON - IP's in JSON format
 
-*3)File Upload support with ability to parse multiple documents formatted with JSON, TXT, CSV, LOG, RTF, DOCX, XLSX, and PDF.*
+*3)File Upload support with ability to parse multiple documents formatted with JSON, TXT, CSV and LOG.*
 
 *4)Provides customizable field projection for specific API response data.*
 
