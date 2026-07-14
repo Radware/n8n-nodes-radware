@@ -1,41 +1,60 @@
-import type { ICredentialType, INodeProperties } from 'n8n-workflow';
+import type {
+        ICredentialTestRequest,
+        ICredentialType,
+        INodeProperties,
+} from 'n8n-workflow';
 
 export class RadwareApi implements ICredentialType {
-	name = 'radwareApi';
-	displayName = 'Radware API';
+        name = 'radwareApi';
+        displayName = 'Radware API';
 
-	// “Open docs” in the credential modal
-	documentationUrl = 'https://github.com/Radware/n8n-nodes-radware';
+        // “Open docs” in the credential modal
+        documentationUrl = 'https://github.com/Radware/n8n-nodes-radware';
 
-	properties: INodeProperties[] = [
-		{
-			displayName: 'Context (API ID)',
-			name: 'context',
-			type: 'string',
-			default: '',
-			required: true,
-			description: 'Your Radware Cloud account/tenant ID',
-			hint: 'This is sent as the “Context” header.',
-		},
-		{
-			displayName: 'x-api-key (API Key)',
-			name: 'xApiKey',
-			type: 'string',
-			typeOptions: { password: true },
-			default: '',
-			required: true,
-			description: 'Your Radware API key',
-			hint: 'This is sent as the “x-api-key” header.',
-		},
-	];
+        properties: INodeProperties[] = [
+                {
+                        displayName: 'Context (API ID)',
+                        name: 'context',
+                        type: 'string',
+                        default: '',
+                        required: true,
+                        description: 'Your Radware Cloud account/tenant ID',
+                        hint: 'This is sent as the “Context” header.',
+                },
+                {
+                        displayName: 'x-api-key (API Key)',
+                        name: 'xApiKey',
+                        type: 'string',
+                        typeOptions: { password: true },
+                        default: '',
+                        required: true,
+                        description: 'Your Radware API key',
+                        hint: 'This is sent as the “x-api-key” header.',
+                },
+        ];
 
-	authenticate = {
-		type: 'generic' as const,
-		properties: {
-			headers: {
-				'x-api-key': '={{$credentials.xApiKey}}',
-				Context: '={{$credentials.context}}',
-			},
-		},
-	};
+        authenticate = {
+                type: 'generic' as const,
+                properties: {
+                        headers: {
+                                'x-api-key': '={{$credentials.xApiKey}}',
+                                Context: '={{$credentials.context}}',
+                        },
+                },
+        };
+
+        test: ICredentialTestRequest = {
+                request: {
+                        baseURL: 'https://api.radwarecloud.app',
+                        url: '/api/v1/sdcc/threat/core/insight/_bulkResolve',
+                        method: 'POST',
+                        headers: {
+                                'Content-Type': 'application/json',
+                        },
+                        body: {
+                                addresses: ['8.8.8.8'],
+                                projection: ['all'],
+                        },
+                },
+        };
 }
