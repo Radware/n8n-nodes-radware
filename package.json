@@ -25,7 +25,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json && npm run copy:assets",
-    "copy:assets": "mkdir -p dist/nodes/Radware && cp src/nodes/Radware/radware_v1.svg dist/nodes/Radware/",
+    "copy:assets": "mkdir -p dist/nodes/Radware && cp nodes/Radware/radware_v1.svg dist/nodes/Radware/",
     "pack": "npm pack"
   },
   "files": [
