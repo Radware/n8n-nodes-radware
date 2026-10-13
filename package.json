@@ -1,6 +1,6 @@
 {
   "name": "@radware/n8n-nodes-radware",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Radware community node for n8n",
   "license": "MIT",
   "author": {
