@@ -1,4 +1,4 @@
-# n8n-nodes-radware
+# @radware/n8n-nodes-radware
 
 This is an n8n community node for interacting with Radware Threat Intelligence service.
 
