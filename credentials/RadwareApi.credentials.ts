@@ -7,6 +7,7 @@ import type {
 export class RadwareApi implements ICredentialType {
         name = 'radwareApi';
         displayName = 'Radware API';
+        icon = 'file:../nodes/Radware/radware_v1.svg' as const;
 
         // “Open docs” in the credential modal
         documentationUrl = 'https://github.com/Radware/n8n-nodes-radware';

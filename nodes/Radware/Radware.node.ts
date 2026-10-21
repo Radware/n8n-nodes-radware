@@ -5,9 +5,11 @@ import {
         INodeType,
         INodeTypeDescription,
         IHttpRequestOptions,
+        INode,
+        NodeConnectionTypes,
+        NodeOperationError,
+        type IExecuteFunctions,
 } from 'n8n-workflow';
-import type { IExecuteFunctions } from 'n8n-workflow';
-import { NodeOperationError } from 'n8n-workflow';
 
 /* ---------------------------------------- */
 /* HELPERS: parsing & extraction utilities  */
@@ -35,58 +37,61 @@ function parseSimpleList(text: string): string[] {
         return extractIpsFromText(cleaned.join(' '));
 }
 
-//  Auto-detect from upstream JSON fields or free text.
+// Read arbitrary JSON safely without relying on `any`.
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+        return value !== null && typeof value === 'object' && !Array.isArray(value)
+                ? value as Record<string, unknown>
+                : undefined;
+}
+
+function asStringArray(value: unknown): string[] | undefined {
+        return Array.isArray(value)
+                ? value.map(String).map(s => s.trim()).filter(Boolean)
+                : undefined;
+}
+
+// Auto-detect from upstream JSON fields or free text.
 function extractAddressesAuto(json: IDataObject): string[] {
-        // Accept the entire incoming item if it's a root-level array
-        if (Array.isArray(json)) {
-                const arr = json as unknown as any[];
-                return arr.map(String).map((s: string) => s.trim()).filter(Boolean);
+        if (Array.isArray(json)) return asStringArray(json) ?? [];
+
+        for (const key of ['addresses', 'ips', 'ipList']) {
+                const values = asStringArray(json[key]);
+                if (values) return values;
         }
+        if (typeof json.ip === 'string' && json.ip.trim()) return [json.ip.trim()];
 
-        for (const k of ['addresses', 'ips', 'ipList']) {
-                const v = (json as any)[k];
-                if (Array.isArray(v)) return v.map(String).map((s: string) => s.trim()).filter(Boolean);
-        }
-        if (typeof (json as any).ip === 'string' && (json as any).ip.trim()) return [(json as any).ip.trim()];
-
-        // Handle JSON mode where body is an object/array
-        const bodyVal = (json as any)?.body;
-        if (bodyVal && typeof bodyVal === 'object') {
-                // Peel one more "body" level if present
-                const inner = (bodyVal as any).body ?? bodyVal;
-
-                if (Array.isArray(inner)) {
-                        return (inner as any[]).map(String).map((s: string) => s.trim()).filter(Boolean);
+        const body = asRecord(json.body);
+        const inner: unknown = body?.body ?? json.body;
+        const innerArray = asStringArray(inner);
+        if (innerArray) return innerArray;
+        const innerObject = asRecord(inner);
+        if (innerObject) {
+                for (const key of ['addresses', 'ips', 'ipList']) {
+                        const values = asStringArray(innerObject[key]);
+                        if (values) return values;
                 }
-                if (Array.isArray((inner as any).addresses)) {
-                        return (inner as any).addresses.map(String).map((s: string) => s.trim()).filter(Boolean);
-                }
-                if (Array.isArray((inner as any).ips)) {
-                        return (inner as any).ips.map(String).map((s: string) => s.trim()).filter(Boolean);
-                }
-                if (Array.isArray((inner as any).ipList)) {
-                        return (inner as any).ipList.map(String).map((s: string) => s.trim()).filter(Boolean);
-                }
-                // Also support free-text under the inner body (e.g., {"body":{"text":"IPs are ..."}})
-                if (typeof (inner as any).text === 'string' && (inner as any).text.trim()) {
-                        return extractIpsFromText((inner as any).text.trim());
+                if (typeof innerObject.text === 'string' && innerObject.text.trim()) {
+                        return extractIpsFromText(innerObject.text.trim());
                 }
         }
 
-        for (const k of ['chatInput', 'text', 'message', 'body']) {
-                const raw = (json as any)[k];
+        for (const key of ['chatInput', 'text', 'message', 'body']) {
+                const raw = json[key];
                 if (typeof raw !== 'string' || !raw.trim()) continue;
-                const t = raw.trim();
-                if (t.startsWith('{') || t.startsWith('[')) {
+                const value = raw.trim();
+                if (value.startsWith('{') || value.startsWith('[')) {
+                        let parsed: unknown;
                         try {
-                                const parsed = JSON.parse(t);
-                                if (Array.isArray((parsed as any).addresses))
-                                        return (parsed as any).addresses.map(String).map((s: string) => s.trim()).filter(Boolean);
-                                if (Array.isArray(parsed))
-                                        return (parsed as any[]).map(String).map((s: string) => s.trim()).filter(Boolean);
-                        } catch { }
+                                parsed = JSON.parse(value) as unknown;
+                        } catch {
+                                return extractIpsFromText(value);
+                        }
+                        const parsedArray = asStringArray(parsed);
+                        if (parsedArray) return parsedArray;
+                        const addresses = asStringArray(asRecord(parsed)?.addresses);
+                        if (addresses) return addresses;
                 }
-                return extractIpsFromText(t);
+                return extractIpsFromText(value);
         }
         return [];
 }
@@ -106,6 +111,7 @@ async function addressesFromBinary(
         buffer: Buffer,
         mime: string | undefined,
         ext: string | undefined,
+        node: INode,
 ): Promise<string[]> {
         const lcMime = (mime || '').toLowerCase();
         const lcExt = (ext || '').toLowerCase().replace(/^\./, '');
@@ -120,7 +126,7 @@ async function addressesFromBinary(
 
         // Reject early if neither MIME nor EXT is allowed
         if (![...ALLOWED_MIME].some((m) => lcMime === m) && !ALLOWED_EXT.has(lcExt)) {
-                throw new Error('Unsupported file type. Allowed: JSON, TXT, CSV, LOG');
+                throw new NodeOperationError(node, 'Unsupported file type. Allowed: JSON, TXT, CSV, LOG');
         }
 
         // JSON: accept array or { addresses: [...] }, but ALWAYS filter to IPv4s only.
@@ -130,10 +136,10 @@ async function addressesFromBinary(
                 if (Array.isArray(parsed)) {
                         return extractIpsFromText(parsed.map(String).join(' '));
                 }
-                if (parsed && Array.isArray((parsed as any).addresses)) {
-                        return extractIpsFromText((parsed as any).addresses.map(String).join(' '));
+                if (asStringArray(asRecord(parsed)?.addresses)) {
+                        return extractIpsFromText((asStringArray(asRecord(parsed)?.addresses) ?? []).join(' '));
                 }
-                throw new Error('JSON must be an array of IPs or have "addresses" array');
+                throw new NodeOperationError(node, 'JSON must be an array of IPs or have "addresses" array');
         }
 
         // Plain text: explicit types only (txt/csv/log)
@@ -141,21 +147,48 @@ async function addressesFromBinary(
                 return parseSimpleList(buffer.toString('utf8'));
         }
 
-        throw new Error('Unsupported file type');
+        throw new NodeOperationError(node, 'Unsupported file type');
 }
 
 /** Parse a single-IP Radware response into a consistent {ip, response} shape. */
 //  Prefer results; on errors/failures, return the failure payload.
-function parseSingleIpResponse(resp: any): { ip: string; response: any } {
-        const failures = Array.isArray(resp?.failures) ? resp.failures : [];
-        const results = resp?.results || {};
-        if (failures.length > 0) {
-                const f = failures[0];
-                return { ip: f.ip, response: f };
-        }
+type IpFailure = IDataObject & { ip: string };
+type BulkResponse = { results: Record<string, IDataObject>; failures: IpFailure[] };
+
+function parseSingleIpResponse(value: unknown): { ip: string; response: IDataObject } {
+        const resp = asRecord(value);
+        const failures = (Array.isArray(resp?.failures) ? resp.failures : []).filter((f): f is IpFailure => typeof asRecord(f)?.ip === 'string');
+        const firstFailure = asRecord(failures[0]);
+        if (firstFailure) return {
+                ip: typeof firstFailure.ip === 'string' ? firstFailure.ip : 'unknown',
+                response: firstFailure as IDataObject,
+        };
+        const results = asRecord(resp?.results) ?? {};
         const ip = Object.keys(results)[0];
-        if (ip && results[ip]) return { ip, response: results[ip] };
+        const result = ip ? asRecord(results[ip]) : undefined;
+        if (ip && result) return { ip, response: result as IDataObject };
         return { ip: 'unknown', response: { error: 'No data returned' } };
+}
+
+function getErrorDetails(error: unknown): { body?: unknown; message: string; error?: unknown } {
+        const data = asRecord(error);
+        return {
+                body: asRecord(data?.response)?.body,
+                message: typeof data?.message === 'string' ? data.message : String(error),
+                error: data?.error,
+        };
+}
+
+function failureReason(value: unknown, defaultReason = 'HTTP request failed'): string {
+        if (value === undefined || value === null) return defaultReason;
+        let parsed: unknown = value;
+        if (typeof value === 'string') {
+                try { parsed = JSON.parse(value) as unknown; }
+                catch { return value; }
+        }
+        const details = asRecord(parsed);
+        const reason = details?.message ?? details?.error ?? details?.reason;
+        return typeof reason === 'string' ? reason : JSON.stringify(parsed) ?? defaultReason;
 }
 
 /* ---------------------------------------- */
@@ -163,6 +196,7 @@ function parseSingleIpResponse(resp: any): { ip: string; response: any } {
 /* ---------------------------------------- */
 export class Radware implements INodeType {
         description: INodeTypeDescription = {
+                usableAsTool: true,
                 displayName: 'Radware',
                 name: 'radware',
                 icon: 'file:radware_v1.svg',
@@ -171,18 +205,18 @@ export class Radware implements INodeType {
                 subtitle: '={{"Radware"}}',
                 description: 'Radware IP Insight',
                 defaults: { name: 'IP Insight' },
-                inputs: ['main'],
-                outputs: ['main'],
+                inputs: [NodeConnectionTypes.Main],
+                outputs: [NodeConnectionTypes.Main],
                 credentials: [{ name: 'radwareApi', required: true }],
                 properties: [
-                        { displayName: 'Operation', name: 'operation', type: 'options', default: 'ipInsight', options: [{ name: 'IP Insight', value: 'ipInsight' }] },
+                        { displayName: 'Operation', name: 'operation', type: 'options', noDataExpression: true, default: 'ipInsight', options: [{ name: 'IP Insight', value: 'ipInsight' }] },
                         {
                                 displayName: 'Base URL',
                                 name: 'baseUrl',
                                 type: 'string',
                                 default: 'https://api.radwarecloud.app/api/v1/sdcc/threat/core',
                                 placeholder: 'https://<host>/api/v1/sdcc/threat/core',
-                                description: 'Do NOT include /insight/_bulkResolve — it is appended automatically.',
+                                description: 'Do not include /insight/_bulkResolve — it is appended automatically',
                         },
                         { displayName: 'HTTP Method', name: 'httpMethod', type: 'options', default: 'POST', options: [{ name: 'POST', value: 'POST' }] },
 
@@ -193,7 +227,7 @@ export class Radware implements INodeType {
                                 type: 'boolean',
                                 default: false,
                                 description:
-                                        'Enable file upload to process multiple IPs. Specify the parameter name for the file field. Supported formats: JSON, TXT, CSV, LOG.',
+                                        'Whether to read IP addresses from uploaded files (JSON, TXT, CSV, LOG)',
                         },
 
                         // Multiple keys and wildcard support in tooltip/placeholder
@@ -210,13 +244,13 @@ export class Radware implements INodeType {
 
                         // Auto-detect Input option
                         {
-                                displayName: 'Auto-detect Input',
+                                displayName: 'Auto-Detect Input',
                                 name: 'autoDetect',
                                 type: 'boolean',
                                 noDataExpression: true,
                                 default: true,
                                 description:
-                                        'Automatically detects IPs from your input: free text, JSON paths like ips/ipList or ip, complete JSON objects, or delimiter-separated text (space, comma, newline, single quote,  double quote).',
+                                        'Whether to automatically detect IPs from free text, JSON fields, JSON objects, or delimiter-separated text',
                         },
 
                         // Body Mode if you want to give inputs from the Radware Node
@@ -230,7 +264,7 @@ export class Radware implements INodeType {
                                         { name: 'Simple List', value: 'list' },
                                         { name: 'Raw JSON', value: 'raw' },
                                 ],
-                                description: 'Select input format: single IP address, JSON object with IP data, or Fields for a simple list.',
+                                description: 'Select input format: single IP address, JSON object with IP data, or Fields for a simple list',
                                 displayOptions: {
                                         show: {
                                                 autoDetect: [false],
@@ -268,7 +302,7 @@ export class Radware implements INodeType {
                                 typeOptions: { rows: 8 },
                                 default: `{\n "addresses": []\n}`,
                                 description:
-                                        'Provide full JSON body. Drag an array pill into "addresses", e.g. {{$json.addresses}}.',
+                                        'Provide full JSON body. Drag an array pill into "addresses", e.g. {{$JSON.addresses}}.',
                                 displayOptions: { show: { bodyMode: ['raw'], autoDetect: [false] } },
                         },
 
@@ -278,23 +312,23 @@ export class Radware implements INodeType {
                                 name: 'projection',
                                 type: 'multiOptions',
                                 options: [
-                                        { name: 'all', value: 'all' },
-                                        { name: 'country_iso', value: 'country_iso' },
-                                        { name: 'ip_type', value: 'ip_type' },
-                                        { name: 'risk_score', value: 'risk_score' },
-                                        { name: 'risk_analysis', value: 'risk_analysis' },
-                                        { name: 'currently_active_eaaf', value: 'currently_active_eaaf' },
-                                        { name: 'eaaf_current_score', value: 'eaaf_current_score' },
-                                        { name: 'aso', value: 'aso' },
-                                        { name: 'asn', value: 'asn' },
-                                        { name: 'cidr', value: 'cidr' },
-                                        { name: 'attack_categories', value: 'attack_categories' },
-                                        { name: 'attacked_verticals', value: 'attacked_verticals' },
-                                        { name: 'actionable_insight', value: 'actionable_insight' },
+                                        { name: 'Actionable Insight', value: 'actionable_insight' },
+                                        { name: 'All', value: 'all' },
+                                        { name: 'Asn', value: 'asn' },
+                                        { name: 'Aso', value: 'aso' },
+                                        { name: 'Attack Categories', value: 'attack_categories' },
+                                        { name: 'Attacked Verticals', value: 'attacked_verticals' },
+                                        { name: 'Cidr', value: 'cidr' },
+                                        { name: 'Country Iso', value: 'country_iso' },
+                                        { name: 'Currently Active Eaaf', value: 'currently_active_eaaf' },
+                                        { name: 'Eaaf Current Score', value: 'eaaf_current_score' },
+                                        { name: 'Ip Type', value: 'ip_type' },
+                                        { name: 'Risk Analysis', value: 'risk_analysis' },
+                                        { name: 'Risk Score', value: 'risk_score' },
                                 ],
                                 default: ['all'],
                                 description:
-                                        'Select specific fields to return or use "all" for complete data (choosing "all" may impact response time).',
+                                        'Select specific fields to return or use "all" for complete data (choosing "all" may impact response time)',
                         },
                         {
                                 displayName: 'Additional Projection Keys (List)',
@@ -303,7 +337,7 @@ export class Radware implements INodeType {
                                 typeOptions: { multipleValues: true, multipleValueButtonText: 'Add key' },
                                 default: [],
                                 description:
-                                        'Optionally add specific keys (e.g. country_iso, ip_type, risk_score, aso, asn, cidr, attack_categories, attacked_verticals, eaaf_current_score, currently_active_eaaf, risk_score, risk_analysis).',
+                                        'Optionally add specific keys (e.g. country_iso, ip_type, risk_score, aso, asn, cidr, attack_categories, attacked_verticals, eaaf_current_score, currently_active_eaaf, risk_analysis)',
                         },
 
                         // Output Mode Options
@@ -316,7 +350,7 @@ export class Radware implements INodeType {
                                 { name: 'All', value: 'all' },
                                 { name: 'Valid Only', value: 'validOnly' },
                             ],
-                            description: 'Show only valid IPs or include all with errors.',
+                            description: 'Show only valid IPs or include all with errors',
                         },
 
                         {
@@ -360,7 +394,7 @@ export class Radware implements INodeType {
                                 options: [
                                         { displayName: 'Ignore SSL Issues', name: 'ignoreSslIssues', type: 'boolean', default: false },
                                         { displayName: 'Proxy', name: 'proxy', type: 'string', default: '', placeholder: 'http://user:pass@host:port' },
-                                        { displayName: 'Timeout (ms)', name: 'timeout', type: 'number', default: 30000 },
+                                        { displayName: 'Timeout (Ms)', name: 'timeout', type: 'number', default: 30000 },
                                         { displayName: 'Return Full Response', name: 'returnFullResponse', type: 'boolean', default: false },
                                 ],
                         },
@@ -378,7 +412,7 @@ export class Radware implements INodeType {
 
                         // Read user options for this item.
                         const baseUrl = (this.getNodeParameter('baseUrl', i) as string) || '';
-                        const httpMethod = this.getNodeParameter('httpMethod', i, 'POST') as string;
+                        // Only POST is supported by this operation.
                         const useBinary = this.getNodeParameter('useBinary', i) as boolean;
                         const autoDetect = this.getNodeParameter('autoDetect', i) as boolean;
                         const outputMode = this.getNodeParameter('outputMode', i) as 'all' | 'validOnly';
@@ -400,7 +434,7 @@ export class Radware implements INodeType {
                                                                 .map(k => k.trim())
                                                                 .filter(Boolean);
 
-                                        let aggregated: string[] = [];
+                                        const aggregated: string[] = [];
 
                                         for (const key of keysToRead) {
                                                 const bin = binMap[key];
@@ -410,9 +444,9 @@ export class Radware implements INodeType {
                                                 const mime = bin.mimeType;
                                                 const ext = bin.fileExtension;
                                                 try {
-                                                        const addrs = await addressesFromBinary(buffer, mime, ext);
+                                                        const addrs = await addressesFromBinary(buffer, mime, ext, this.getNode());
                                                         if (addrs?.length) aggregated.push(...addrs);
-                                                } catch (e: any) {
+                                                } catch {
                                                         // Soft-fail per file: keep going with other files.
                                                         // If you prefer to hard-fail, replace with:
                                                         // throw new NodeOperationError(this.getNode(), `Failed to read file "${key}": ${e.message || e}`);
@@ -492,7 +526,7 @@ export class Radware implements INodeType {
                         const timeout = (options.timeout as number) ?? 30000;
 
                         const requestOptions: IHttpRequestOptions = {
-                                method: httpMethod as any,
+                                method: 'POST',
                                 url: `${baseUrl.replace(/\/$/, '')}/insight/_bulkResolve`,
                                 json: true,
                                 body,
@@ -502,15 +536,15 @@ export class Radware implements INodeType {
                         };
 
                         try {
-                                const resp = await this.helpers.httpRequestWithAuthentication.call(this, 'radwareApi', requestOptions);
-                                const failures = Array.isArray(resp?.failures) ? resp.failures : [];
+                                const resp = await this.helpers.httpRequestWithAuthentication.call(this, 'radwareApi', requestOptions) as IDataObject;
+                                const failures = (Array.isArray(resp.failures) ? resp.failures : []).filter((f): f is IpFailure => typeof asRecord(f)?.ip === 'string');
 
                                 // BULK FAILURE HANDLING
                                 // If bulk has failures, retry each IP individually and merge results.
                                 if (failures.length > 0) {
-                                        const allResponses: any = { results: resp?.results || {}, failures: [] };
+                                        const allResponses: BulkResponse = { results: (asRecord(resp.results) ?? {}) as Record<string, IDataObject>, failures: [] };
                                         // Keep original failure reasons by IP.
-                                        const originalFailureMap = new Map<string, any>();
+                                        const originalFailureMap = new Map<string, IpFailure>();
                                         for (const f of failures) {
                                                 if (f.ip) originalFailureMap.set(f.ip.trim(), f);
                                         }
@@ -536,8 +570,8 @@ export class Radware implements INodeType {
                                                 const originalFailure = originalFailureMap.get(trimmedIp);
                                                 if (originalFailure) {
                                                         allResponses.failures.push({
-                                                                ip: trimmedIp,
                                                                 ...originalFailure,
+                                                                ip: trimmedIp,
                                                         });
                                                         continue;
                                                 }
@@ -555,21 +589,13 @@ export class Radware implements INodeType {
                                                         } else {
                                                                 allResponses.results[trimmedIp] = parsed.response;
                                                         }
-                                                } catch (e: any) {
+                                                } catch (e: unknown) {
                                                         const fallback = originalFailureMap.get(trimmedIp);
                                                         if (fallback) {
-                                                                allResponses.failures.push({ ip: trimmedIp, ...fallback });
+                                                                allResponses.failures.push({ ...fallback, ip: trimmedIp });
                                                         } else {
-                                                                const errorBody = e.response?.body;
-                                                                let reason = 'HTTP request failed';
-                                                                if (errorBody) {
-                                                                        try {
-                                                                                const parsed = typeof errorBody === 'string' ? JSON.parse(errorBody) : errorBody;
-                                                                                reason = parsed.message || parsed.error || parsed.reason || JSON.stringify(parsed);
-                                                                        } catch {
-                                                                                reason = errorBody.toString();
-                                                                        }
-                                                                }
+                                                                const details = getErrorDetails(e);
+                                                                const reason = failureReason(details.body, details.message);
                                                                 allResponses.failures.push({ ip: trimmedIp, reason, raw: reason });
                                                         }
                                                 }
@@ -578,13 +604,10 @@ export class Radware implements INodeType {
                                         // Output shaping: either “valid only” rows or the combined object.
                                         if (outputMode === 'validOnly') {
                                                 for (const [ip, data] of Object.entries(allResponses.results)) {
-                                                        out.push({ json: { ip, response: data as IDataObject } });
-                                                }
-                                                for (const f of allResponses.failures) {
-                                                        out.push({ json: { ip: f.ip, response: f as IDataObject } });
+                                                        out.push({ json: { ip, response: data as IDataObject }, pairedItem: { item: i } });
                                                 }
                                         } else {
-                                                out.push({ json: allResponses as IDataObject });
+                                                out.push({ json: allResponses as IDataObject, pairedItem: { item: i } });
                                         }
                                         continue;
                                 }
@@ -592,25 +615,21 @@ export class Radware implements INodeType {
                                 // SUCCESS PATH (no bulk failures).
                                 // Emit either per-IP rows (validOnly) or raw response.
                                 if (outputMode === 'validOnly') {
-                                        const results = resp?.results || {};
-                                        const ips = Array.isArray(resp?.ips) ? resp.ips : Object.keys(results);
+                                        const results = (asRecord(resp.results) ?? {}) as Record<string, IDataObject>;
+                                        const ips: string[] = Array.isArray(resp.ips) ? resp.ips.filter((ip): ip is string => typeof ip === 'string') : Object.keys(results);
                                         for (const ip of ips) {
                                                 if (results[ip]) {
-                                                        out.push({ json: { ip, response: results[ip] as IDataObject } });
+                                                        out.push({ json: { ip, response: results[ip] as IDataObject }, pairedItem: { item: i } });
                                                 }
                                         }
-                                        const failures = Array.isArray(resp?.failures) ? resp.failures : [];
-                                        for (const f of failures) {
-                                                out.push({ json: { ip: f.ip, response: f as IDataObject } });
-                                        }
                                 } else {
-                                        out.push({ json: resp as IDataObject });
+                                        out.push({ json: resp as IDataObject, pairedItem: { item: i } });
                                 }
-                        } catch (error: any) {
+                        } catch (error: unknown) {
                                 // If the bulk call failed entirely, attempt per-IP single calls for resilience.
                                 const addresses = (body?.addresses as string[]) || [];
                                 if (addresses.length > 0) {
-                                        const allResponses: any = { results: {}, failures: [] };
+                                        const allResponses: BulkResponse = { results: {}, failures: [] };
                                         const ipv4FormatRegex = /^\d{1,3}(\.\d{1,3}){3}$/;
 
                                         for (const ip of addresses) {
@@ -634,34 +653,26 @@ export class Radware implements INodeType {
                                                         } else {
                                                                 allResponses.results[trimmedIp] = parsed.response;
                                                         }
-                                                } catch (e: any) {
-                                                        const errorBody = e.response?.body;
-                                                        let reason = errorBody?.toString() || e.message || 'HTTP request failed';
-                                                        if (errorBody) {
-                                                                try {
-                                                                        const parsed = typeof errorBody === 'string' ? JSON.parse(errorBody) : errorBody;
-                                                                        reason = parsed.message || parsed.error || parsed.reason || JSON.stringify(parsed);
-                                                                } catch {}
-                                                        }
+                                                } catch (e: unknown) {
+                                                        const errorBody = getErrorDetails(e).body;
+                                                        const reason = failureReason(errorBody, getErrorDetails(e).message);
                                                         allResponses.failures.push({ ip: trimmedIp, reason, raw: reason });
                                                 }
                                         }
 
                                         if (outputMode === 'validOnly') {
                                                 for (const [ip, data] of Object.entries(allResponses.results)) {
-                                                        out.push({ json: { ip, response: data as IDataObject } });
-                                                }
-                                                for (const f of allResponses.failures) {
-                                                        out.push({ json: { ip: f.ip, response: f as IDataObject } });
+                                                        out.push({ json: { ip, response: data as IDataObject }, pairedItem: { item: i } });
                                                 }
                                         } else {
-                                                out.push({ json: allResponses as IDataObject });
+                                                out.push({ json: allResponses as IDataObject, pairedItem: { item: i } });
                                         }
                                         continue;
                                 }
 
-                                const apiError = error.response?.body || error.error || { error: error.message };
-                                out.push({ json: apiError as IDataObject });
+                                const details = getErrorDetails(error);
+                                const apiError = asRecord(details.body) ?? asRecord(details.error) ?? { error: details.message };
+                                out.push({ json: apiError as IDataObject, pairedItem: { item: i } });
                         }
                 }
 
